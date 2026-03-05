@@ -11,16 +11,23 @@ st.sidebar.header("1. Caricamento Dati")
 uploaded_file = st.sidebar.file_uploader("Carica file (.csv, .xlsx)", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
-    try:
+   try:
         # Lettura del file in base all'estensione
         if uploaded_file.name.endswith('.csv'):
+            # Tentativo 1: Standard Internazionale (separatore ,)
             df = pd.read_csv(uploaded_file)
+            
+            # Se ha letto una sola colonna, probabile formato Europeo
+            if df.shape[1] < 2:
+                uploaded_file.seek(0) # Riavvolge il file per rileggerlo
+                # Tentativo 2: Formato Europeo (separatore ; e decimale ,)
+                df = pd.read_csv(uploaded_file, sep=';', decimal=',')
         else:
             df = pd.read_excel(uploaded_file)
             
-        # Controllo struttura minima
+        # Controllo struttura minima dopo il parsing corretto
         if df.shape[1] < 2:
-            st.error("Il file deve contenere almeno due colonne: Data e almeno un Asset.")
+            st.error("Il file deve contenere almeno due colonne: Data e almeno un Asset. Verifica il delimitatore del tuo CSV.")
             st.stop()
 
         # Parsing della prima colonna come DateTime
@@ -33,7 +40,11 @@ if uploaded_file is not None:
             df = df.dropna(subset=[date_col])
             
         df = df.set_index(date_col)
+        
+        # Sostituiamo eventuali virgole rimaste come stringhe (se il file era misto) prima di forzare a numerico
+        df = df.replace({',': '.'}, regex=True)
         df = df.apply(pd.to_numeric, errors='coerce') # Forza i prezzi a numerico
+        
         df = df.dropna(how='all') # Rimuovi righe completamente vuote
         df = df.sort_index() # Assicura l'ordine cronologico
 
@@ -124,4 +135,5 @@ if uploaded_file is not None:
         st.dataframe(df_filtered)
 
 else:
+
     st.info("Attesa caricamento file. Usa la barra laterale per iniziare.")
