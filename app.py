@@ -11,23 +11,23 @@ st.sidebar.header("1. Caricamento Dati")
 uploaded_file = st.sidebar.file_uploader("Carica file (.csv, .xlsx)", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
-   try:
-        # Lettura del file in base all'estensione
+    try:
+        # Lettura del file in base all'estensione e formato
         if uploaded_file.name.endswith('.csv'):
-            # Tentativo 1: Standard Internazionale (separatore ,)
+            # Tentativo 1: Formato Standard Internazionale (separatore virgola)
             df = pd.read_csv(uploaded_file)
             
-            # Se ha letto una sola colonna, probabile formato Europeo
+            # Se ha letto una sola colonna, è quasi certamente il formato Europeo
             if df.shape[1] < 2:
-                uploaded_file.seek(0) # Riavvolge il file per rileggerlo
-                # Tentativo 2: Formato Europeo (separatore ; e decimale ,)
+                uploaded_file.seek(0) # Riavvolge il buffer del file
+                # Tentativo 2: Formato Europeo (separatore punto e virgola, decimali con virgola)
                 df = pd.read_csv(uploaded_file, sep=';', decimal=',')
         else:
             df = pd.read_excel(uploaded_file)
             
-        # Controllo struttura minima dopo il parsing corretto
+        # Controllo struttura minima
         if df.shape[1] < 2:
-            st.error("Il file deve contenere almeno due colonne: Data e almeno un Asset. Verifica il delimitatore del tuo CSV.")
+            st.error("Il file deve contenere almeno due colonne: Data e almeno un Asset.")
             st.stop()
 
         # Parsing della prima colonna come DateTime
@@ -41,15 +41,18 @@ if uploaded_file is not None:
             
         df = df.set_index(date_col)
         
-        # Sostituiamo eventuali virgole rimaste come stringhe (se il file era misto) prima di forzare a numerico
-        df = df.replace({',': '.'}, regex=True)
-        df = df.apply(pd.to_numeric, errors='coerce') # Forza i prezzi a numerico
-        
-        df = df.dropna(how='all') # Rimuovi righe completamente vuote
-        df = df.sort_index() # Assicura l'ordine cronologico
+        # Pulisci le eventuali virgole rimaste come stringhe e forza il tipo numerico
+        # Questo previene crash se pandas non ha convertito correttamente i decimali
+        if df.map(lambda x: isinstance(x, str)).any().any():
+            df = df.replace({',': '.'}, regex=True)
+            
+        df = df.apply(pd.to_numeric, errors='coerce') 
+        df = df.dropna(how='all') 
+        df = df.sort_index() 
 
     except Exception as e:
-        st.error(f"Errore critico durante il parsing del file. Verifica la formattazione. Dettagli: {e}")
+        # L'indentazione qui è vitale. Questo blocco gestisce tutto il try superiore.
+        st.error(f"Errore critico durante il parsing del file. Dettagli: {e}")
         st.stop()
 
     # 2. Interfaccia Utente e Filtri
@@ -58,7 +61,7 @@ if uploaded_file is not None:
     # Selezione Asset
     available_assets = df.columns.tolist()
     selected_assets = st.sidebar.multiselect(
-        "Seleziona Asset da analizzare",
+        "Seleziona Asset",
         options=available_assets,
         default=available_assets
     )
@@ -74,14 +77,14 @@ if uploaded_file is not None:
     max_date = df_selected.index.max().date()
     
     date_range = st.sidebar.date_input(
-        "Seleziona Orizzonte Temporale",
+        "Orizzonte Temporale",
         value=(min_date, max_date),
         min_value=min_date,
         max_value=max_date
     )
     
     if len(date_range) != 2:
-        st.stop() # Attende che l'utente selezioni entrambe le date
+        st.stop()
         
     start_date, end_date = date_range
     mask = (df_selected.index.date >= start_date) & (df_selected.index.date <= end_date)
@@ -89,15 +92,25 @@ if uploaded_file is not None:
 
     # Timeframe (Resampling)
     timeframe = st.sidebar.selectbox(
-        "Seleziona Timeframe",
-        options=["Giornaliero (Originale)", "Settimanale", "Mensile"]
+        "Timeframe",
+        options=["Giornaliero", "Settimanale", "Mensile"]
     )
     
-    # Logica di resampling: usiamo l'ultimo valore del periodo (chiusura), non la media
+    # Logica di resampling finanziario (ultimo prezzo del periodo)
     if timeframe == "Settimanale":
         df_filtered = df_filtered.resample('W').last()
     elif timeframe == "Mensile":
         df_filtered = df_filtered.resample('ME').last()
+
+    # Normalizzazione Base 100: Trasforma i prezzi in percentuali relative al punto di partenza
+    normalize = st.sidebar.checkbox("Normalizza a Base 100", value=True, help="Mostra la performance relativa permettendo di confrontare asset con prezzi assoluti molto diversi.")
+    
+    if normalize:
+        # Divide tutto per la prima riga e moltiplica per 100
+        df_filtered = (df_filtered / df_filtered.iloc[0]) * 100
+        y_label = "Valore Normalizzato (Base 100)"
+    else:
+        y_label = "Prezzo Assoluto"
 
     # Trasformazione dei dati in formato long per Plotly
     df_melted = df_filtered.reset_index().melt(
@@ -108,32 +121,28 @@ if uploaded_file is not None:
     )
 
     # 3. Output (Visualizzazione)
-    st.subheader(f"Evoluzione Prezzi ({timeframe})")
+    st.subheader(f"Evoluzione Asset ({timeframe})")
     
-    # Generazione grafico: Uso un grafico a linee con marcatori (scatter)
-    # per unire la tua richiesta di "scatter" con la necessità logica di una linea temporale
     fig = px.line(
         df_melted, 
         x=date_col, 
         y='Prezzo', 
         color='Asset',
-        markers=True, # Inserisce i punti (scatter) sulle linee
-        title="Confronto Asset Selezionati",
+        markers=True, 
+        title="Confronto Performance",
         hover_data={"Prezzo": ":.2f", date_col: "|%Y-%m-%d"}
     )
     
     fig.update_layout(
         xaxis_title="Data",
-        yaxis_title="Prezzo Assoluto",
+        yaxis_title=y_label,
         hovermode="x unified"
     )
     
     st.plotly_chart(fig, use_container_width=True)
     
-    # Mostra i dati tabulari su richiesta
-    with st.expander("Visualizza i dati grezzi filtrati"):
+    with st.expander("Visualizza i dati grezzi analizzati"):
         st.dataframe(df_filtered)
 
 else:
-
-    st.info("Attesa caricamento file. Usa la barra laterale per iniziare.")
+    st.info("Attesa caricamento file. Usa la barra laterale.")
