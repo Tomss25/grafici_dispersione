@@ -46,7 +46,6 @@ if uploaded_file is not None:
         with col1:
             selected_assets_trad = st.multiselect("Asset", options=available_assets, default=available_assets[:3], key="trad_assets")
         with col2:
-            # Modifica: "Solo Linee" è ora l'opzione di default (index=0)
             chart_style = st.selectbox("Stile Grafico", options=["Solo Linee", "Linee + Punti", "Solo Punti"], index=0, key="chart_style")
 
         if not selected_assets_trad:
@@ -72,7 +71,7 @@ if uploaded_file is not None:
             st.plotly_chart(fig, use_container_width=True)
 
     with tab2:
-        st.header("Relative Rotation Graph (RRG)")
+        st.header("Relative Rotation Graph (RRG) & Heatmap")
         st.markdown("Mostra la rotazione di forza e momentum rispetto a un benchmark. **Nota:** Il calcolo consuma i primi periodi storici per le medie mobili.")
         
         col_bench, col_ass = st.columns([1, 2])
@@ -84,7 +83,7 @@ if uploaded_file is not None:
             selected_rrg_assets = st.multiselect("Asset da analizzare", options=rrg_options, default=rrg_options[:3])
             
         rrg_window = st.number_input("Periodi Media Mobile (Standard: 14)", min_value=5, max_value=50, value=14)
-        tail_length = st.slider("Lunghezza Coda (Ultimi N periodi da mostrare)", min_value=1, max_value=20, value=5)
+        tail_length = st.slider("Lunghezza Coda (Ultimi N periodi da mostrare nell'RRG)", min_value=1, max_value=20, value=5)
 
         if selected_rrg_assets:
             df_rrg = df[[benchmark] + selected_rrg_assets].copy()
@@ -141,7 +140,78 @@ if uploaded_file is not None:
                     width=700
                 )
                 
-                # Modifica: Utilizzo di colonne per accentrare il grafico RRG
                 col_left, col_center, col_right = st.columns([1, 3, 1])
                 with col_center:
                     st.plotly_chart(fig_rrg, use_container_width=True)
+
+                # ---------------------------------------------------------
+                # NUOVA SEZIONE: Analisi Automatica RRG, Heatmap e Confronto
+                # ---------------------------------------------------------
+                
+                # 1. Analisi Automatica RRG
+                st.markdown("### Analisi Dinamica RRG")
+                leading, improving, weakening, lagging = [], [], [], []
+                for _, row in current_points.iterrows():
+                    if row['RS-Ratio'] >= 100 and row['RS-Momentum'] >= 100: leading.append(row['Asset'])
+                    elif row['RS-Ratio'] < 100 and row['RS-Momentum'] >= 100: improving.append(row['Asset'])
+                    elif row['RS-Ratio'] >= 100 and row['RS-Momentum'] < 100: weakening.append(row['Asset'])
+                    else: lagging.append(row['Asset'])
+
+                analisi_rrg = f"""
+                **Fotografia attuale della rotazione (Ultima Data):**
+                - **Leading (Leader):** {', '.join(leading) if leading else 'Nessuno'}. Stanno sovraperformando il benchmark con slancio crescente.
+                - **Improving (In miglioramento):** {', '.join(improving) if improving else 'Nessuno'}. Sottoperformano ma stanno accumulando forza relativa per un potenziale breakout.
+                - **Weakening (In indebolimento):** {', '.join(weakening) if weakening else 'Nessuno'}. Ancora forti storicamente, ma stanno esaurendo la spinta direzionale.
+                - **Lagging (Ritardatari):** {', '.join(lagging) if lagging else 'Nessuno'}. Strutturalmente deboli e in continuo deterioramento relativo.
+                """
+                st.info(analisi_rrg)
+
+                st.markdown("---")
+
+                # 2. Performance Heatmap
+                st.subheader("Performance Heatmap (Rendimenti %)")
+                st.markdown("Mostra i rendimenti assoluti periodici per quantificare le variazioni di forza viste nell'RRG.")
+                
+                # Calcolo rendimenti percentuali periodici sugli ultimi 12 periodi utili
+                hm_periods = min(12, len(df_rrg_clean))
+                df_returns = df_rrg_clean[selected_rrg_assets].pct_change().dropna() * 100
+                df_hm = df_returns.tail(hm_periods).T
+                df_hm.columns = df_hm.columns.strftime('%Y-%m-%d') # Formattazione date
+
+                fig_hm = px.imshow(
+                    df_hm,
+                    labels=dict(x="Data", y="Asset", color="Rendimento %"),
+                    x=df_hm.columns,
+                    y=df_hm.index,
+                    text_auto=".2f",
+                    aspect="auto",
+                    color_continuous_scale="RdYlGn",
+                )
+                fig_hm.update_layout(height=400)
+                st.plotly_chart(fig_hm, use_container_width=True)
+
+                # 3. Analisi Automatica Heatmap
+                st.markdown("### Analisi Dinamica Heatmap")
+                if not df_returns.empty:
+                    last_period_returns = df_returns.iloc[-1]
+                    best_asset = last_period_returns.idxmax()
+                    worst_asset = last_period_returns.idxmin()
+                    
+                    analisi_hm = f"""
+                    Nell'ultimo periodo osservato ({df_returns.index[-1].strftime('%Y-%m-%d')}), l'asset con la performance migliore è stato **{best_asset}** con un **{last_period_returns[best_asset]:.2f}%**, mentre il peggiore è stato **{worst_asset}** con un **{last_period_returns[worst_asset]:.2f}%**. 
+                    I colori caldi (rosso) indicano distruzione di capitale assoluta, i colori freddi/accesi (verde) indicano espansione pura, indipendentemente da cosa fa il benchmark.
+                    """
+                    st.info(analisi_hm)
+
+                st.markdown("---")
+
+                # 4. Comparazione Strategica
+                st.markdown("### Comparazione Strategica: RRG vs Heatmap")
+                comparazione = f"""
+                Stai guardando due facce della stessa medaglia: l'**RRG** ti mostra il trend della *Forza Relativa* (dove stanno ruotando i capitali rispetto al {benchmark}), mentre la **Heatmap** ti sbatte in faccia la *Forza Assoluta* (se stai effettivamente guadagnando o perdendo soldi).
+                
+                **Cosa cercare:**
+                Se l'asset **{best_asset if not df_returns.empty else 'migliore'}** è verde brillante nella Heatmap ma si trova bloccato in *Lagging* nell'RRG, significa che tutto il mercato sta salendo forte, e questo asset sta semplicemente galleggiando trainato dalla marea (non è un vero leader). 
+                Viceversa, se vedi un asset in *Leading* nell'RRG ma con rendimenti negativi o deboli nella Heatmap, fai attenzione: significa che il benchmark sta crollando, e il tuo "Leader" sta solo crollando più lentamente degli altri. Stai sovraperformando, ma stai comunque perdendo capitale.
+                """
+                st.warning(comparazione)
