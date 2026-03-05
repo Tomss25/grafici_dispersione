@@ -118,11 +118,20 @@ if uploaded_file is not None:
                         })
                 
                 df_plot = pd.DataFrame(plot_data)
-                
-                fig_rrg = px.line(df_plot, x='RS-Ratio', y='RS-Momentum', color='Asset', markers=True, hover_data=['Data'])
-                
                 current_points = df_plot[df_plot['Is_Current'] == "Ultimo"]
-                fig_rrg.add_scatter(x=current_points['RS-Ratio'], y=current_points['RS-Momentum'], mode='markers', marker=dict(size=12, color='black'), showlegend=False, hoverinfo='skip')
+                
+                # --- MODIFICA: Interruttore per la visualizzazione della coda (Tail) ---
+                st.markdown("---")
+                show_tail = st.toggle("Mostra scia di rotazione (Storico)", value=False, help="Attiva per vedere la traiettoria temporale dell'asset. Senza questa scia, stai ignorando il Momentum direzionale.")
+                
+                if show_tail:
+                    # Grafico RRG completo con la scia (Linee + Punti correnti evidenziati)
+                    fig_rrg = px.line(df_plot, x='RS-Ratio', y='RS-Momentum', color='Asset', markers=True, hover_data=['Data'])
+                    fig_rrg.add_scatter(x=current_points['RS-Ratio'], y=current_points['RS-Momentum'], mode='markers', marker=dict(size=12, color='black'), showlegend=False, hoverinfo='skip')
+                else:
+                    # Grafico castrato: solo il punto corrente
+                    fig_rrg = px.scatter(current_points, x='RS-Ratio', y='RS-Momentum', color='Asset', hover_data=['Data'])
+                    fig_rrg.update_traces(marker=dict(size=12, line=dict(width=1, color='DarkSlateGrey')))
 
                 fig_rrg.add_vline(x=100, line_dash="dash", line_color="gray")
                 fig_rrg.add_hline(y=100, line_dash="dash", line_color="gray")
@@ -203,7 +212,7 @@ if uploaded_file is not None:
 
                 st.markdown("---")
 
-                # 4. Comparazione Strategica Esplicita (Il motore logico che hai richiesto)
+                # 4. Comparazione Strategica Esplicita 
                 st.markdown("### Sintesi Strategica: RRG Incrociato con Heatmap")
                 
                 if not df_returns.empty:
