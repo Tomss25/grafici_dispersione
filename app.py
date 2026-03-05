@@ -2,147 +2,162 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Configurazione della pagina
-st.set_page_config(page_title="Analisi Serie Storiche", layout="wide")
-st.title("Analisi e Confronto Serie Storiche Finanziarie")
+st.set_page_config(page_title="Analisi Quantitativa", layout="wide")
+st.title("Analisi Serie Storiche & RRG")
 
-# 1. Gestione dell'Input (Dati)
-st.sidebar.header("1. Caricamento Dati")
-uploaded_file = st.sidebar.file_uploader("Carica file (.csv, .xlsx)", type=["csv", "xlsx"])
+# 1. Caricamento Dati
+st.sidebar.header("1. Dati")
+uploaded_file = st.sidebar.file_uploader("Carica file", type=["csv", "xlsx"])
 
 if uploaded_file is not None:
     try:
-        # Lettura del file in base all'estensione e formato
         if uploaded_file.name.endswith('.csv'):
-            # Tentativo 1: Formato Standard Internazionale (separatore virgola)
             df = pd.read_csv(uploaded_file)
-            
-            # Se ha letto una sola colonna, è quasi certamente il formato Europeo
             if df.shape[1] < 2:
-                uploaded_file.seek(0) # Riavvolge il buffer del file
-                # Tentativo 2: Formato Europeo (separatore punto e virgola, decimali con virgola)
+                uploaded_file.seek(0) 
                 df = pd.read_csv(uploaded_file, sep=';', decimal=',')
         else:
             df = pd.read_excel(uploaded_file)
             
-        # Controllo struttura minima
         if df.shape[1] < 2:
-            st.error("Il file deve contenere almeno due colonne: Data e almeno un Asset.")
+            st.error("Formato non valido.")
             st.stop()
 
-        # Parsing della prima colonna come DateTime
         date_col = df.columns[0]
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+        df = df.dropna(subset=[date_col]).set_index(date_col)
         
-        # Rimozione righe con date non valide
-        if df[date_col].isnull().any():
-            st.warning("Alcune date non sono state riconosciute e sono state scartate.")
-            df = df.dropna(subset=[date_col])
-            
-        df = df.set_index(date_col)
-        
-        # Pulisci le eventuali virgole rimaste come stringhe e forza il tipo numerico
-        # Questo previene crash se pandas non ha convertito correttamente i decimali
         if df.map(lambda x: isinstance(x, str)).any().any():
             df = df.replace({',': '.'}, regex=True)
             
-        df = df.apply(pd.to_numeric, errors='coerce') 
-        df = df.dropna(how='all') 
-        df = df.sort_index() 
+        df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').sort_index()
 
     except Exception as e:
-        # L'indentazione qui è vitale. Questo blocco gestisce tutto il try superiore.
-        st.error(f"Errore critico durante il parsing del file. Dettagli: {e}")
+        st.error(f"Errore parsing: {e}")
         st.stop()
 
-    # 2. Interfaccia Utente e Filtri
-    st.sidebar.header("2. Filtri di Analisi")
-    
-    # Selezione Asset
     available_assets = df.columns.tolist()
-    selected_assets = st.sidebar.multiselect(
-        "Seleziona Asset",
-        options=available_assets,
-        default=available_assets
-    )
-    
-    if not selected_assets:
-        st.warning("Seleziona almeno un asset per procedere.")
-        st.stop()
+
+    # Creazione delle schede (Tabs)
+    tab1, tab2 = st.tabs(["Analisi Tradizionale", "Relative Rotation Graph (RRG)"])
+
+    with tab1:
+        st.header("Grafico Prezzi Storici")
         
-    df_selected = df[selected_assets]
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_assets_trad = st.multiselect("Asset", options=available_assets, default=available_assets[:3], key="trad_assets")
+        with col2:
+            # Il tuo selettore estetico
+            chart_style = st.selectbox("Stile Grafico", options=["Linee + Punti", "Solo Linee", "Solo Punti"], key="chart_style")
 
-    # Orizzonte temporale
-    min_date = df_selected.index.min().date()
-    max_date = df_selected.index.max().date()
-    
-    date_range = st.sidebar.date_input(
-        "Orizzonte Temporale",
-        value=(min_date, max_date),
-        min_value=min_date,
-        max_value=max_date
-    )
-    
-    if len(date_range) != 2:
-        st.stop()
+        if not selected_assets_trad:
+            st.warning("Seleziona asset.")
+        else:
+            df_trad = df[selected_assets_trad]
+            
+            # Filtro Date
+            start_date_trad = st.date_input("Inizio", value=df_trad.index.min().date(), key="start_trad")
+            end_date_trad = st.date_input("Fine", value=df_trad.index.max().date(), key="end_trad")
+            
+            df_trad = df_trad.loc[start_date_trad:end_date_trad]
+            
+            # Normalizzazione
+            if st.checkbox("Normalizza a Base 100", value=True):
+                df_trad = (df_trad / df_trad.iloc[0]) * 100
+                
+            df_melted = df_trad.reset_index().melt(id_vars=date_col, var_name='Asset', value_name='Valore')
+
+            # Mappatura stile grafico
+            mode_map = {"Linee + Punti": "lines+markers", "Solo Linee": "lines", "Solo Punti": "markers"}
+            
+            fig = px.line(df_melted, x=date_col, y='Valore', color='Asset')
+            fig.update_traces(mode=mode_map[chart_style])
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
+
+    with tab2:
+        st.header("Relative Rotation Graph (RRG)")
+        st.markdown("Mostra la rotazione di forza e momentum rispetto a un benchmark. **Nota:** Il calcolo consuma i primi 28 periodi di dati per le medie mobili.")
         
-    start_date, end_date = date_range
-    mask = (df_selected.index.date >= start_date) & (df_selected.index.date <= end_date)
-    df_filtered = df_selected.loc[mask]
+        col_bench, col_ass = st.columns([1, 2])
+        with col_bench:
+            # Selezione Benchmark (Default: ^GSPC se esiste)
+            default_bench = "^GSPC" if "^GSPC" in available_assets else available_assets[0]
+            benchmark = st.selectbox("Benchmark", options=available_assets, index=available_assets.index(default_bench))
+        with col_ass:
+            # Selezione Asset da confrontare (escludendo il benchmark)
+            rrg_options = [a for a in available_assets if a != benchmark]
+            selected_rrg_assets = st.multiselect("Asset da analizzare", options=rrg_options, default=rrg_options[:3])
+            
+        # Parametri RRG
+        rrg_window = st.number_input("Periodi Media Mobile (Standard: 14)", min_value=5, max_value=50, value=14)
+        tail_length = st.slider("Lunghezza Coda (Ultimi N periodi da mostrare)", min_value=1, max_value=20, value=5)
 
-    # Timeframe (Resampling)
-    timeframe = st.sidebar.selectbox(
-        "Timeframe",
-        options=["Giornaliero", "Settimanale", "Mensile"]
-    )
-    
-    # Logica di resampling finanziario (ultimo prezzo del periodo)
-    if timeframe == "Settimanale":
-        df_filtered = df_filtered.resample('W').last()
-    elif timeframe == "Mensile":
-        df_filtered = df_filtered.resample('ME').last()
+        if selected_rrg_assets:
+            df_rrg = df[[benchmark] + selected_rrg_assets].copy()
+            
+            # Calcolo Matematico RRG
+            # 1. Forza Relativa (RS)
+            for asset in selected_rrg_assets:
+                df_rrg[f'RS_{asset}'] = df_rrg[asset] / df_rrg[benchmark]
+                
+            # 2. RS-Ratio (Trend della forza relativa)
+            for asset in selected_rrg_assets:
+                rs_sma = df_rrg[f'RS_{asset}'].rolling(window=rrg_window).mean()
+                df_rrg[f'Ratio_{asset}'] = 100 * (df_rrg[f'RS_{asset}'] / rs_sma)
+                
+            # 3. RS-Momentum (Spinta dell'RS-Ratio)
+            for asset in selected_rrg_assets:
+                ratio_sma = df_rrg[f'Ratio_{asset}'].rolling(window=rrg_window).mean()
+                df_rrg[f'Mom_{asset}'] = 100 * (df_rrg[f'Ratio_{asset}'] / ratio_sma)
 
-    # Normalizzazione Base 100: Trasforma i prezzi in percentuali relative al punto di partenza
-    normalize = st.sidebar.checkbox("Normalizza a Base 100", value=True, help="Mostra la performance relativa permettendo di confrontare asset con prezzi assoluti molto diversi.")
-    
-    if normalize:
-        # Divide tutto per la prima riga e moltiplica per 100
-        df_filtered = (df_filtered / df_filtered.iloc[0]) * 100
-        y_label = "Valore Normalizzato (Base 100)"
-    else:
-        y_label = "Prezzo Assoluto"
+            # Rimuoviamo i NaN generati dalle medie mobili
+            df_rrg_clean = df_rrg.dropna()
 
-    # Trasformazione dei dati in formato long per Plotly
-    df_melted = df_filtered.reset_index().melt(
-        id_vars=date_col, 
-        value_vars=selected_assets, 
-        var_name='Asset', 
-        value_name='Prezzo'
-    )
+            if df_rrg_clean.empty or len(df_rrg_clean) < tail_length:
+                st.error(f"Dati insufficienti. L'RRG richiede almeno {rrg_window * 2} periodi storici consecutivi per calcolare le medie. Allarga il timeframe dei tuoi dati grezzi.")
+            else:
+                # Prendiamo solo la "coda" selezionata per non sporcare il grafico
+                df_tail = df_rrg_clean.tail(tail_length)
+                
+                # Preparazione Dati per Plotly
+                plot_data = []
+                for asset in selected_rrg_assets:
+                    for i, date in enumerate(df_tail.index):
+                        plot_data.append({
+                            'Data': date,
+                            'Asset': asset,
+                            'RS-Ratio': df_tail.loc[date, f'Ratio_{asset}'],
+                            'RS-Momentum': df_tail.loc[date, f'Mom_{asset}'],
+                            'Is_Current': "Ultimo" if i == len(df_tail) - 1 else "Storico"
+                        })
+                
+                df_plot = pd.DataFrame(plot_data)
+                
+                # Costruzione Grafico Scatter (L'RRG usa scatter plot collegati)
+                fig_rrg = px.line(df_plot, x='RS-Ratio', y='RS-Momentum', color='Asset', markers=True, hover_data=['Data'])
+                
+                # Aggiungiamo i punti più grandi per indicare l'osservazione corrente
+                current_points = df_plot[df_plot['Is_Current'] == "Ultimo"]
+                fig_rrg.add_scatter(x=current_points['RS-Ratio'], y=current_points['RS-Momentum'], mode='markers', marker=dict(size=12, color='black'), showlegend=False, hoverinfo='skip')
 
-    # 3. Output (Visualizzazione)
-    st.subheader(f"Evoluzione Asset ({timeframe})")
-    
-    fig = px.line(
-        df_melted, 
-        x=date_col, 
-        y='Prezzo', 
-        color='Asset',
-        markers=True, 
-        title="Confronto Performance",
-        hover_data={"Prezzo": ":.2f", date_col: "|%Y-%m-%d"}
-    )
-    
-    fig.update_layout(
-        xaxis_title="Data",
-        yaxis_title=y_label,
-        hovermode="x unified"
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    with st.expander("Visualizza i dati grezzi analizzati"):
-        st.dataframe(df_filtered)
+                # Linee di base a 100 (I quattro quadranti)
+                fig_rrg.add_vline(x=100, line_dash="dash", line_color="gray")
+                fig_rrg.add_hline(y=100, line_dash="dash", line_color="gray")
+                
+                # Etichette Quadranti
+                fig_rrg.add_annotation(x=102, y=102, text="Leading (Forte & in Crescita)", showarrow=False, font=dict(color="green"))
+                fig_rrg.add_annotation(x=98, y=102, text="Improving (Debole ma in Recupero)", showarrow=False, font=dict(color="blue"))
+                fig_rrg.add_annotation(x=102, y=98, text="Weakening (Forte ma in Rallentamento)", showarrow=False, font=dict(color="orange"))
+                fig_rrg.add_annotation(x=98, y=98, text="Lagging (Debole & in Calo)", showarrow=False, font=dict(color="red"))
 
-else:
-    st.info("Attesa caricamento file. Usa la barra laterale.")
+                fig_rrg.update_layout(
+                    title=f"Relative Rotation Graph vs {benchmark}",
+                    xaxis_title="RS-Ratio (Forza Relativa)",
+                    yaxis_title="RS-Momentum (Spinta)",
+                    height=700,
+                    width=700
+                )
+                
+                st.plotly_chart(fig_rrg, use_container_width=False)
