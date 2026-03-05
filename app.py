@@ -145,7 +145,7 @@ if uploaded_file is not None:
                     st.plotly_chart(fig_rrg, use_container_width=True)
 
                 # ---------------------------------------------------------
-                # NUOVA SEZIONE: Analisi Automatica RRG, Heatmap e Confronto
+                # Analisi Automatica RRG, Heatmap e Confronto
                 # ---------------------------------------------------------
                 
                 # 1. Analisi Automatica RRG
@@ -172,11 +172,10 @@ if uploaded_file is not None:
                 st.subheader("Performance Heatmap (Rendimenti %)")
                 st.markdown("Mostra i rendimenti assoluti periodici per quantificare le variazioni di forza viste nell'RRG.")
                 
-                # Calcolo rendimenti percentuali periodici sugli ultimi 12 periodi utili
                 hm_periods = min(12, len(df_rrg_clean))
                 df_returns = df_rrg_clean[selected_rrg_assets].pct_change().dropna() * 100
                 df_hm = df_returns.tail(hm_periods).T
-                df_hm.columns = df_hm.columns.strftime('%Y-%m-%d') # Formattazione date
+                df_hm.columns = df_hm.columns.strftime('%Y-%m-%d')
 
                 fig_hm = px.imshow(
                     df_hm,
@@ -199,19 +198,42 @@ if uploaded_file is not None:
                     
                     analisi_hm = f"""
                     Nell'ultimo periodo osservato ({df_returns.index[-1].strftime('%Y-%m-%d')}), l'asset con la performance migliore è stato **{best_asset}** con un **{last_period_returns[best_asset]:.2f}%**, mentre il peggiore è stato **{worst_asset}** con un **{last_period_returns[worst_asset]:.2f}%**. 
-                    I colori caldi (rosso) indicano distruzione di capitale assoluta, i colori freddi/accesi (verde) indicano espansione pura, indipendentemente da cosa fa il benchmark.
                     """
                     st.info(analisi_hm)
 
                 st.markdown("---")
 
-                # 4. Comparazione Strategica
-                st.markdown("### Comparazione Strategica: RRG vs Heatmap")
-                comparazione = f"""
-                Stai guardando due facce della stessa medaglia: l'**RRG** ti mostra il trend della *Forza Relativa* (dove stanno ruotando i capitali rispetto al {benchmark}), mentre la **Heatmap** ti sbatte in faccia la *Forza Assoluta* (se stai effettivamente guadagnando o perdendo soldi).
+                # 4. Comparazione Strategica Esplicita (Il motore logico che hai richiesto)
+                st.markdown("### Sintesi Strategica: RRG Incrociato con Heatmap")
                 
-                **Cosa cercare:**
-                Se l'asset **{best_asset if not df_returns.empty else 'migliore'}** è verde brillante nella Heatmap ma si trova bloccato in *Lagging* nell'RRG, significa che tutto il mercato sta salendo forte, e questo asset sta semplicemente galleggiando trainato dalla marea (non è un vero leader). 
-                Viceversa, se vedi un asset in *Leading* nell'RRG ma con rendimenti negativi o deboli nella Heatmap, fai attenzione: significa che il benchmark sta crollando, e il tuo "Leader" sta solo crollando più lentamente degli altri. Stai sovraperformando, ma stai comunque perdendo capitale.
-                """
-                st.warning(comparazione)
+                if not df_returns.empty:
+                    for asset in selected_rrg_assets:
+                        if asset in df_returns.columns and not current_points[current_points['Asset'] == asset].empty:
+                            ret = last_period_returns[asset]
+                            row = current_points[current_points['Asset'] == asset].iloc[0]
+                            rs_ratio = row['RS-Ratio']
+                            rs_mom = row['RS-Momentum']
+                            
+                            # Logica dei quadranti
+                            if rs_ratio >= 100 and rs_mom >= 100: quad = "Leading"
+                            elif rs_ratio < 100 and rs_mom >= 100: quad = "Improving"
+                            elif rs_ratio >= 100 and rs_mom < 100: quad = "Weakening"
+                            else: quad = "Lagging"
+                            
+                            # Sintesi Brutale
+                            if quad == "Leading" and ret > 0:
+                                st.success(f"**{asset}**: VERO LEADER. È in *Leading* e ha generato capitale assoluto (+{ret:.2f}%). Sta trainando in termini sia relativi che assoluti.")
+                            elif quad == "Leading" and ret <= 0:
+                                st.error(f"**{asset}**: FALSO LEADER. È in *Leading* ma sta perdendo soldi ({ret:.2f}%). Crolla più lentamente del benchmark, ma distrugge comunque il tuo capitale.")
+                            elif quad == "Lagging" and ret > 0:
+                                st.warning(f"**{asset}**: ZAVORRA FORTUNATA. È in *Lagging* ma guadagna (+{ret:.2f}%). Non ha forza propria, sta solo galleggiando perché l'intero mercato sale. Alla prima correzione, collasserà.")
+                            elif quad == "Lagging" and ret <= 0:
+                                st.error(f"**{asset}**: DISTRUTTORE DI VALORE. È in *Lagging* e sanguina profitti ({ret:.2f}%). Sottoperforma un mercato che già di suo scende. Tossico.")
+                            elif quad == "Improving" and ret > 0:
+                                st.info(f"**{asset}**: ACCUMULAZIONE SANA. È in *Improving* e macina utili (+{ret:.2f}%). Recupera forza relativa e genera cassa. Da monitorare per un ingresso.")
+                            elif quad == "Improving" and ret <= 0:
+                                st.warning(f"**{asset}**: RIMBALZO DEL GATTO MORTO? È in *Improving* ma chiude in rosso ({ret:.2f}%). Sembra recuperare solo perché scende meno violentemente del benchmark.")
+                            elif quad == "Weakening" and ret > 0:
+                                st.warning(f"**{asset}**: ESAURIMENTO RIALZISTA. È in *Weakening* ma ti dà ancora soldi (+{ret:.2f}%). Attenzione: la spinta direzionale sta morendo. Prepara la via d'uscita.")
+                            elif quad == "Weakening" and ret <= 0:
+                                st.error(f"**{asset}**: INVERSIONE CONFERMATA. È in *Weakening* e ha già iniziato a bruciare cassa ({ret:.2f}%). Il trend si è rotto. Taglia.")
