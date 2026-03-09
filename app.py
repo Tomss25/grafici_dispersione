@@ -1,10 +1,11 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 
-st.set_page_config(page_title="Analisi Quantitativa", layout="wide")
+st.set_page_config(page_title="Quantitative Strategy Desk", layout="wide")
 
-# Iniezione CSS per Stile Moderno/Apple
+# Iniezione CSS (Mantenuto il tuo stile moderno/Apple)
 st.markdown("""
     <style>
         html, body, [class*="css"] {
@@ -30,7 +31,7 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-st.title("Analisi Serie Storiche & RRG")
+st.title("Analisi Serie Storiche & RRG (Z-Score Model)")
 
 st.sidebar.header("1. Dati")
 uploaded_file = st.sidebar.file_uploader("Carica file", type=["csv", "xlsx"])
@@ -67,11 +68,10 @@ if uploaded_file is not None:
     tab1, tab2 = st.tabs(["Relative Rotation Graph (RRG) & Heatmap", "Analisi Tradizionale"])
 
     # ---------------------------------------------------------
-    # TAB 1: RRG & HEATMAP
+    # TAB 1: RRG Z-SCORE ENGINE
     # ---------------------------------------------------------
     with tab1:
         st.header("Relative Rotation Graph (RRG) & Heatmap")
-        st.markdown("Mostra la rotazione di forza e momentum rispetto a un benchmark. **Nota:** Il calcolo consuma i primi periodi storici per le medie mobili.")
         
         col_bench, col_ass = st.columns([1, 2])
         with col_bench:
@@ -82,38 +82,43 @@ if uploaded_file is not None:
             selected_rrg_assets = st.multiselect("Asset da analizzare", options=rrg_options, default=rrg_options[:3])
             
         st.sidebar.markdown("---")
-        st.sidebar.header("Parametri Calcolo RRG")
-        rrg_window = st.sidebar.number_input("Periodi Media Mobile", min_value=5, max_value=50, value=14)
-        
-        # MODIFICA: EMA è ora l'opzione di default (al primo posto nella lista)
-        ma_type = st.sidebar.selectbox("Tipo Media Mobile", options=["Esponenziale (EMA)", "Semplice (SMA)"], help="EMA (Default): Più reattiva ai prezzi recenti, ma soggetta a falsi segnali (whipsaw). SMA: Più stabile, curve più morbide.")
-        
-        tail_length = st.slider("Lunghezza Coda (Ultimi N periodi da mostrare nell'RRG)", min_value=1, max_value=20, value=5)
+        st.sidebar.header("Impostazioni Visualizzazione")
+        tail_length = st.sidebar.slider("Lunghezza Coda (Ultimi N periodi)", min_value=1, max_value=20, value=5)
+
+        # Alert brutale sui dati necessari
+        st.info("📊 **Motore Z-Score Attivo:** Il calcolo richiede EMA(12) + EMA(26) + Rolling(52) + Delta(1) + Rolling(14). Le prime ~70 righe del dataset verranno consumate per il warm-up statistico.")
 
         if selected_rrg_assets:
             df_rrg = df[[benchmark] + selected_rrg_assets].copy()
             
             for asset in selected_rrg_assets:
-                df_rrg[f'RS_{asset}'] = df_rrg[asset] / df_rrg[benchmark]
+                # 1. Input e RS_raw = Settore / SP500
+                rs_raw = df_rrg[asset] / df_rrg[benchmark]
                 
-            for asset in selected_rrg_assets:
-                if ma_type == "Semplice (SMA)":
-                    rs_ma = df_rrg[f'RS_{asset}'].rolling(window=rrg_window).mean()
-                else:
-                    rs_ma = df_rrg[f'RS_{asset}'].ewm(span=rrg_window, adjust=False).mean()
-                df_rrg[f'Ratio_{asset}'] = 100 * (df_rrg[f'RS_{asset}'] / rs_ma)
+                # 2. EMA12(RS_raw)
+                ema_12 = rs_raw.ewm(span=12, adjust=False).mean()
                 
-            for asset in selected_rrg_assets:
-                if ma_type == "Semplice (SMA)":
-                    ratio_ma = df_rrg[f'Ratio_{asset}'].rolling(window=rrg_window).mean()
-                else:
-                    ratio_ma = df_rrg[f'Ratio_{asset}'].ewm(span=rrg_window, adjust=False).mean()
-                df_rrg[f'Mom_{asset}'] = 100 * (df_rrg[f'Ratio_{asset}'] / ratio_ma)
+                # 3. EMA26(EMA12) = RS_s (Doppio Smoothing)
+                rs_s = ema_12.ewm(span=26, adjust=False).mean()
+                
+                # 4. Z-score rolling 52w -> RS-Ratio (X) = 100 ± 10σ
+                rolling_mean_52 = rs_s.rolling(window=52).mean()
+                rolling_std_52 = rs_s.rolling(window=52).std()
+                z_score_ratio = (rs_s - rolling_mean_52) / rolling_std_52
+                df_rrg[f'Ratio_{asset}'] = 100 + (z_score_ratio * 10)
+                
+                # 5. ΔRS-Ratio -> Z-score rolling 14w -> RS-Momentum (Y) = 100 ± 10σ
+                delta_rs_ratio = df_rrg[f'Ratio_{asset}'].diff(1)
+                rolling_mean_14_mom = delta_rs_ratio.rolling(window=14).mean()
+                rolling_std_14_mom = delta_rs_ratio.rolling(window=14).std()
+                z_score_mom = (delta_rs_ratio - rolling_mean_14_mom) / rolling_std_14_mom
+                df_rrg[f'Mom_{asset}'] = 100 + (z_score_mom * 10)
 
+            # Rimuoviamo tutti i NaN generati dal tremendo consumo di dati delle finestre rolling
             df_rrg_clean = df_rrg.dropna()
 
             if df_rrg_clean.empty or len(df_rrg_clean) < tail_length:
-                st.error(f"Dati insufficienti. L'RRG richiede almeno {rrg_window * 2} periodi storici consecutivi per calcolare le medie. Allarga il timeframe dei tuoi dati grezzi.")
+                st.error("🚨 **ERRORE CRITICO DEI DATI:** Non hai abbastanza storico. Il modello Rolling Z-Score ha bruciato i dati per calcolare le deviazioni standard e non è rimasto nulla da plottare. Carica un file con almeno 2-3 anni di storico continuo.")
             else:
                 df_tail = df_rrg_clean.tail(tail_length)
                 
@@ -132,7 +137,7 @@ if uploaded_file is not None:
                 current_points = df_plot[df_plot['Is_Current'] == "Ultimo"]
                 
                 st.markdown("---")
-                show_tail = st.toggle("Mostra scia di rotazione (Storico)", value=False, help="Attiva per vedere la traiettoria temporale dell'asset. Senza questa scia, stai ignorando il Momentum direzionale.")
+                show_tail = st.toggle("Mostra scia di rotazione (Storico)", value=True)
                 
                 if show_tail:
                     fig_rrg = px.line(df_plot, x='RS-Ratio', y='RS-Momentum', color='Asset', markers=True, hover_data=['Data'])
@@ -149,40 +154,22 @@ if uploaded_file is not None:
                 fig_rrg.add_annotation(x=102, y=98, text="Weakening", showarrow=False, font=dict(color="orange"))
                 fig_rrg.add_annotation(x=98, y=98, text="Lagging", showarrow=False, font=dict(color="red"))
 
+                # Fissiamo i limiti degli assi per dare stabilità visiva al grafico Z-Score
                 fig_rrg.update_layout(
-                    title=f"Relative Rotation Graph vs {benchmark}",
-                    xaxis_title="RS-Ratio (Forza Relativa)",
-                    yaxis_title="RS-Momentum (Spinta)",
+                    title=f"Relative Rotation Graph (Z-Score Model) vs {benchmark}",
+                    xaxis_title="RS-Ratio (Forza Relativa Z-Score)",
+                    yaxis_title="RS-Momentum (Spinta Z-Score)",
                     height=700,
-                    width=700
+                    width=700,
+                    xaxis=dict(range=[70, 130]), # +/- 3 Deviazioni Standard (100 ± 30)
+                    yaxis=dict(range=[70, 130])
                 )
                 
                 col_left, col_center, col_right = st.columns([1, 3, 1])
                 with col_center:
                     st.plotly_chart(fig_rrg, use_container_width=True)
 
-                st.markdown("### Analisi Dinamica RRG")
-                leading, improving, weakening, lagging = [], [], [], []
-                for _, row in current_points.iterrows():
-                    if row['RS-Ratio'] >= 100 and row['RS-Momentum'] >= 100: leading.append(row['Asset'])
-                    elif row['RS-Ratio'] < 100 and row['RS-Momentum'] >= 100: improving.append(row['Asset'])
-                    elif row['RS-Ratio'] >= 100 and row['RS-Momentum'] < 100: weakening.append(row['Asset'])
-                    else: lagging.append(row['Asset'])
-
-                analisi_rrg = f"""
-                **Fotografia attuale della rotazione (Ultima Data):**
-                - **Leading (Leader):** {', '.join(leading) if leading else 'Nessuno'}. Stanno sovraperformando il benchmark con slancio crescente.
-                - **Improving (In miglioramento):** {', '.join(improving) if improving else 'Nessuno'}. Sottoperformano ma stanno accumulando forza relativa per un potenziale breakout.
-                - **Weakening (In indebolimento):** {', '.join(weakening) if weakening else 'Nessuno'}. Ancora forti storicamente, ma stanno esaurendo la spinta direzionale.
-                - **Lagging (Ritardatari):** {', '.join(lagging) if lagging else 'Nessuno'}. Strutturalmente deboli e in continuo deterioramento relativo.
-                """
-                st.info(analisi_rrg)
-
-                st.markdown("---")
-
-                st.subheader("Performance Heatmap (Rendimenti %)")
-                st.markdown("Mostra i rendimenti assoluti periodici per quantificare le variazioni di forza viste nell'RRG.")
-                
+                st.markdown("### Analisi Dinamica Heatmap")
                 hm_periods = min(12, len(df_rrg_clean))
                 df_returns = df_rrg_clean[selected_rrg_assets].pct_change().dropna() * 100
                 df_hm = df_returns.tail(hm_periods).T
@@ -199,51 +186,6 @@ if uploaded_file is not None:
                 )
                 fig_hm.update_layout(height=400)
                 st.plotly_chart(fig_hm, use_container_width=True)
-
-                st.markdown("### Analisi Dinamica Heatmap")
-                if not df_returns.empty:
-                    last_period_returns = df_returns.iloc[-1]
-                    best_asset = last_period_returns.idxmax()
-                    worst_asset = last_period_returns.idxmin()
-                    
-                    analisi_hm = f"""
-                    Nell'ultimo periodo osservato ({df_returns.index[-1].strftime('%Y-%m-%d')}), l'asset con la performance migliore è stato **{best_asset}** con un **{last_period_returns[best_asset]:.2f}%**, mentre il peggiore è stato **{worst_asset}** con un **{last_period_returns[worst_asset]:.2f}%**. 
-                    """
-                    st.info(analisi_hm)
-
-                st.markdown("---")
-
-                st.markdown("### Sintesi Strategica: RRG Incrociato con Heatmap")
-                
-                if not df_returns.empty:
-                    for asset in selected_rrg_assets:
-                        if asset in df_returns.columns and not current_points[current_points['Asset'] == asset].empty:
-                            ret = last_period_returns[asset]
-                            row = current_points[current_points['Asset'] == asset].iloc[0]
-                            rs_ratio = row['RS-Ratio']
-                            rs_mom = row['RS-Momentum']
-                            
-                            if rs_ratio >= 100 and rs_mom >= 100: quad = "Leading"
-                            elif rs_ratio < 100 and rs_mom >= 100: quad = "Improving"
-                            elif rs_ratio >= 100 and rs_mom < 100: quad = "Weakening"
-                            else: quad = "Lagging"
-                            
-                            if quad == "Leading" and ret > 0:
-                                st.success(f"**{asset}**: VERO LEADER. È in *Leading* e ha generato capitale assoluto (+{ret:.2f}%). Sta trainando in termini sia relativi che assoluti.")
-                            elif quad == "Leading" and ret <= 0:
-                                st.error(f"**{asset}**: FALSO LEADER. È in *Leading* ma sta perdendo soldi ({ret:.2f}%). Crolla più lentamente del benchmark, ma distrugge comunque il tuo capitale.")
-                            elif quad == "Lagging" and ret > 0:
-                                st.warning(f"**{asset}**: ZAVORRA FORTUNATA. È in *Lagging* ma guadagna (+{ret:.2f}%). Non ha forza propria, sta solo galleggiando perché l'intero mercato sale. Alla prima correzione, collasserà.")
-                            elif quad == "Lagging" and ret <= 0:
-                                st.error(f"**{asset}**: DISTRUTTORE DI VALORE. È in *Lagging* e sanguina profitti ({ret:.2f}%). Sottoperforma un mercato che già di suo scende. Tossico.")
-                            elif quad == "Improving" and ret > 0:
-                                st.info(f"**{asset}**: ACCUMULAZIONE SANA. È in *Improving* e macina utili (+{ret:.2f}%). Recupera forza relativa e genera cassa. Da monitorare per un ingresso.")
-                            elif quad == "Improving" and ret <= 0:
-                                st.warning(f"**{asset}**: RIMBALZO DEL GATTO MORTO? È in *Improving* ma chiude in rosso ({ret:.2f}%). Sembra recuperare solo perché scende meno violentemente del benchmark.")
-                            elif quad == "Weakening" and ret > 0:
-                                st.warning(f"**{asset}**: ESAURIMENTO RIALZISTA. È in *Weakening* ma ti dà ancora soldi (+{ret:.2f}%). Attenzione: la spinta direzionale sta morendo. Prepara la via d'uscita.")
-                            elif quad == "Weakening" and ret <= 0:
-                                st.error(f"**{asset}**: INVERSIONE CONFERMATA. È in *Weakening* e ha già iniziato a bruciare cassa ({ret:.2f}%). Il trend si è rotto. Taglia.")
 
     # ---------------------------------------------------------
     # TAB 2: ANALISI TRADIZIONALE
