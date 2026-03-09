@@ -5,7 +5,6 @@ import plotly.express as px
 
 st.set_page_config(page_title="Quantitative Strategy Desk", layout="wide")
 
-# Iniezione CSS 
 st.markdown("""
     <style>
         html, body, [class*="css"] {
@@ -63,7 +62,6 @@ if uploaded_file is not None:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
         df = df.dropna(subset=[date_col]).set_index(date_col)
         
-        # Gestione robusta delle conversioni numeriche
         if hasattr(df, 'map'):
             if df.map(lambda x: isinstance(x, str)).any().any():
                 df = df.replace({',': '.'}, regex=True)
@@ -96,44 +94,63 @@ if uploaded_file is not None:
             selected_rrg_assets = st.multiselect("Asset da analizzare", options=rrg_options, default=rrg_options[:3])
             
         st.sidebar.markdown("---")
-        st.sidebar.header("Impostazioni Visualizzazione")
-        tail_length = st.sidebar.slider("Lunghezza Coda (Ultimi N periodi)", min_value=1, max_value=20, value=5)
+        st.sidebar.header("Architettura Modello")
+        
+        data_freq = st.sidebar.selectbox(
+            "Frequenza Dati Input", 
+            options=["Settimanale", "Giornaliero", "Mensile"],
+            help="Modifica i pesi del Z-Score per mantenere la finestra di osservazione pari a 1 Anno (Ratio) e 1 Trimestre (Momentum)."
+        )
+        
+        if data_freq == "Giornaliero":
+            span1, span2 = 60, 130
+            win_ratio, min_ratio = 252, 63
+            win_mom, min_mom = 70, 21
+            st.sidebar.info("⚙️ Parametri: EMA(60/130), Z-Score 1A(252g), Mom 1T(70g)")
+        elif data_freq == "Settimanale":
+            span1, span2 = 12, 26
+            win_ratio, min_ratio = 52, 14
+            win_mom, min_mom = 14, 7
+            st.sidebar.info("⚙️ Parametri: EMA(12/26), Z-Score 1A(52s), Mom 1T(14s)")
+        else: # Mensile
+            span1, span2 = 3, 6
+            win_ratio, min_ratio = 12, 6
+            win_mom, min_mom = 3, 2
+            st.sidebar.info("⚙️ Parametri: EMA(3/6), Z-Score 1A(12m), Mom 1T(3m)")
 
-        st.info("📊 **Motore Z-Score Dinamico:** Il calcolo richiede EMA(12)+EMA(26) ed espande le finestre di deviazione standard dinamicamente (da un minimo di 14 periodi fino ai 52 target) per simulare l'approccio tollerante di Excel sugli storici brevi.")
+        st.sidebar.markdown("---")
+        tail_length = st.sidebar.slider("Lunghezza Coda (Ultimi N periodi)", min_value=1, max_value=20, value=5)
 
         if selected_rrg_assets:
             df_rrg = df[[benchmark] + selected_rrg_assets].copy()
             
             for asset in selected_rrg_assets:
-                # 1. Input e RS_raw = Settore / SP500
+                # 1. RS_raw
                 rs_raw = df_rrg[asset] / df_rrg[benchmark]
                 
-                # 2. EMA12(RS_raw)
-                ema_12 = rs_raw.ewm(span=12, adjust=False).mean()
+                # 2. EMA(span1)
+                ema_1 = rs_raw.ewm(span=span1, adjust=False).mean()
                 
-                # 3. EMA26(EMA12) = RS_s (Doppio Smoothing)
-                rs_s = ema_12.ewm(span=26, adjust=False).mean()
+                # 3. EMA(span2) su EMA(span1) = Doppio Smoothing
+                rs_s = ema_1.ewm(span=span2, adjust=False).mean()
                 
-                # 4. Z-score rolling 52w -> RS-Ratio (X) = 100 ± 10σ
-                # min_periods=14 permette al modello di iniziare a calcolare molto prima delle 52 settimane
-                rolling_mean_52 = rs_s.rolling(window=52, min_periods=14).mean()
-                rolling_std_52 = rs_s.rolling(window=52, min_periods=14).std()
-                z_score_ratio = (rs_s - rolling_mean_52) / rolling_std_52
+                # 4. Z-score rolling -> RS-Ratio (X)
+                rolling_mean_ratio = rs_s.rolling(window=win_ratio, min_periods=min_ratio).mean()
+                rolling_std_ratio = rs_s.rolling(window=win_ratio, min_periods=min_ratio).std()
+                z_score_ratio = (rs_s - rolling_mean_ratio) / rolling_std_ratio
                 df_rrg[f'Ratio_{asset}'] = 100 + (z_score_ratio * 10)
                 
-                # 5. ΔRS-Ratio -> Z-score rolling 14w -> RS-Momentum (Y) = 100 ± 10σ
-                # min_periods=7 salva lo storico limitato
+                # 5. ΔRS-Ratio -> Z-score rolling -> RS-Momentum (Y)
                 delta_rs_ratio = df_rrg[f'Ratio_{asset}'].diff(1)
-                rolling_mean_14_mom = delta_rs_ratio.rolling(window=14, min_periods=7).mean()
-                rolling_std_14_mom = delta_rs_ratio.rolling(window=14, min_periods=7).std()
-                z_score_mom = (delta_rs_ratio - rolling_mean_14_mom) / rolling_std_14_mom
+                rolling_mean_mom = delta_rs_ratio.rolling(window=win_mom, min_periods=min_mom).mean()
+                rolling_std_mom = delta_rs_ratio.rolling(window=win_mom, min_periods=min_mom).std()
+                z_score_mom = (delta_rs_ratio - rolling_mean_mom) / rolling_std_mom
                 df_rrg[f'Mom_{asset}'] = 100 + (z_score_mom * 10)
 
-            # Rimuoviamo i pochi NaN residuali derivati dal warm-up flessibile
             df_rrg_clean = df_rrg.dropna()
 
             if df_rrg_clean.empty or len(df_rrg_clean) < tail_length:
-                st.error("🚨 **ERRORE CRITICO DEI DATI:** Non hai abbastanza storico nemmeno per il warm-up dinamico. Assicurati che il file contenga almeno 20 righe (periodi) valide.")
+                st.error(f"🚨 **ERRORE DATI:** Non hai sufficiente storico per inizializzare il modello sul time frame '{data_freq}'. Aggiungi più righe al tuo file Excel.")
             else:
                 df_tail = df_rrg_clean.tail(tail_length)
                 
@@ -200,6 +217,45 @@ if uploaded_file is not None:
                 )
                 fig_hm.update_layout(height=400)
                 st.plotly_chart(fig_hm, use_container_width=True)
+
+                # ---------------------------------------------------------
+                # SEZIONE REINSERITA: Analisi e Comparazione Automatica
+                # ---------------------------------------------------------
+                st.markdown("---")
+                st.markdown("### Sintesi Strategica: RRG (Z-Score) Incrociato con Heatmap")
+                
+                if not df_returns.empty:
+                    last_period_returns = df_returns.iloc[-1]
+                    for asset in selected_rrg_assets:
+                        if asset in df_returns.columns and not current_points[current_points['Asset'] == asset].empty:
+                            ret = last_period_returns[asset]
+                            row = current_points[current_points['Asset'] == asset].iloc[0]
+                            rs_ratio = row['RS-Ratio']
+                            rs_mom = row['RS-Momentum']
+                            
+                            # Logica dei quadranti pura
+                            if rs_ratio >= 100 and rs_mom >= 100: quad = "Leading"
+                            elif rs_ratio < 100 and rs_mom >= 100: quad = "Improving"
+                            elif rs_ratio >= 100 and rs_mom < 100: quad = "Weakening"
+                            else: quad = "Lagging"
+                            
+                            # Sintesi Brutale
+                            if quad == "Leading" and ret > 0:
+                                st.success(f"**{asset}**: VERO LEADER. È in *Leading* e ha generato capitale assoluto (+{ret:.2f}%). Sta trainando in termini sia relativi che assoluti.")
+                            elif quad == "Leading" and ret <= 0:
+                                st.error(f"**{asset}**: FALSO LEADER. È in *Leading* ma sta perdendo soldi ({ret:.2f}%). Crolla più lentamente del benchmark, ma distrugge comunque il tuo capitale.")
+                            elif quad == "Lagging" and ret > 0:
+                                st.warning(f"**{asset}**: ZAVORRA FORTUNATA. È in *Lagging* ma guadagna (+{ret:.2f}%). Non ha forza propria, sta solo galleggiando perché l'intero mercato sale. Alla prima correzione, collasserà.")
+                            elif quad == "Lagging" and ret <= 0:
+                                st.error(f"**{asset}**: DISTRUTTORE DI VALORE. È in *Lagging* e sanguina profitti ({ret:.2f}%). Sottoperforma un mercato che già di suo scende. Tossico.")
+                            elif quad == "Improving" and ret > 0:
+                                st.info(f"**{asset}**: ACCUMULAZIONE SANA. È in *Improving* e macina utili (+{ret:.2f}%). Recupera forza relativa e genera cassa. Da monitorare per un ingresso.")
+                            elif quad == "Improving" and ret <= 0:
+                                st.warning(f"**{asset}**: RIMBALZO DEL GATTO MORTO? È in *Improving* ma chiude in rosso ({ret:.2f}%). Sembra recuperare solo perché scende meno violentemente del benchmark.")
+                            elif quad == "Weakening" and ret > 0:
+                                st.warning(f"**{asset}**: ESAURIMENTO RIALZISTA. È in *Weakening* ma ti dà ancora soldi (+{ret:.2f}%). Attenzione: la spinta direzionale sta morendo. Prepara la via d'uscita.")
+                            elif quad == "Weakening" and ret <= 0:
+                                st.error(f"**{asset}**: INVERSIONE CONFERMATA. È in *Weakening* e ha già iniziato a bruciare cassa ({ret:.2f}%). Il trend si è rotto. Taglia.")
 
     # ---------------------------------------------------------
     # TAB 2: ANALISI TRADIZIONALE
