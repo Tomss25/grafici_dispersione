@@ -39,10 +39,23 @@ uploaded_file = st.sidebar.file_uploader("Carica file", type=["csv", "xlsx"])
 if uploaded_file is not None:
     try:
         if uploaded_file.name.endswith('.csv'):
-            df = pd.read_csv(uploaded_file)
+            try:
+                # Tentativo 1: Standard globale (UTF-8)
+                df = pd.read_csv(uploaded_file)
+            except UnicodeDecodeError:
+                # Fallback: Il file arriva da un Excel salvato male (Windows/Latin-1)
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, encoding='latin1')
+                
             if df.shape[1] < 2:
                 uploaded_file.seek(0) 
-                df = pd.read_csv(uploaded_file, sep=';', decimal=',')
+                try:
+                    # Tentativo CSV Europeo con UTF-8
+                    df = pd.read_csv(uploaded_file, sep=';', decimal=',')
+                except UnicodeDecodeError:
+                    # Fallback CSV Europeo con encoding Latin-1
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file, sep=';', decimal=',', encoding='latin1')
         else:
             df = pd.read_excel(uploaded_file)
             
@@ -220,3 +233,4 @@ if uploaded_file is not None:
             fig.update_traces(mode=mode_map[chart_style])
             fig.update_layout(hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
+
