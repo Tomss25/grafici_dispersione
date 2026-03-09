@@ -4,29 +4,24 @@ import plotly.express as px
 
 st.set_page_config(page_title="Analisi Quantitativa", layout="wide")
 
-# Iniezione CSS per Stile Moderno/Apple (Bordi arrotondati, font puliti, ombre morbide)
+# Iniezione CSS per Stile Moderno/Apple
 st.markdown("""
     <style>
-        /* Font di sistema stile Apple */
         html, body, [class*="css"] {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
         }
-        /* Bordi arrotondati per input, selettori e bottoni */
         .stSelectbox div[data-baseweb="select"] > div,
         .stMultiSelect div[data-baseweb="select"] > div,
         .stTextInput input, .stNumberInput input, .stDateInput input {
             border-radius: 12px !important;
         }
-        /* Arrotondamento per i messaggi di Info/Success/Error */
         div[data-testid="stAlert"] {
             border-radius: 12px !important;
             box-shadow: 0 4px 6px rgba(0,0,0,0.04);
         }
-        /* Stile moderno per i Tab */
         button[data-baseweb="tab"] {
             border-radius: 10px 10px 0px 0px !important;
         }
-        /* Contenitori e blocchi */
         div[data-testid="stExpander"] {
             border-radius: 12px !important;
             border: 1px solid #eaeaea;
@@ -69,11 +64,10 @@ if uploaded_file is not None:
 
     available_assets = df.columns.tolist()
 
-    # INVERSIONE DELLE PAGINE: Tab 1 è ora l'RRG, Tab 2 è l'Analisi Tradizionale
     tab1, tab2 = st.tabs(["Relative Rotation Graph (RRG) & Heatmap", "Analisi Tradizionale"])
 
     # ---------------------------------------------------------
-    # TAB 1: RRG & HEATMAP (Spostato qui come prima pagina)
+    # TAB 1: RRG & HEATMAP
     # ---------------------------------------------------------
     with tab1:
         st.header("Relative Rotation Graph (RRG) & Heatmap")
@@ -90,7 +84,10 @@ if uploaded_file is not None:
         st.sidebar.markdown("---")
         st.sidebar.header("Parametri Calcolo RRG")
         rrg_window = st.sidebar.number_input("Periodi Media Mobile", min_value=5, max_value=50, value=14)
-        ma_type = st.sidebar.selectbox("Tipo Media Mobile", options=["Semplice (SMA)", "Esponenziale (EMA)"], help="SMA: Più stabile, curve più morbide. EMA: Più reattiva ai prezzi recenti, ma soggetta a falsi segnali (whipsaw).")
+        
+        # MODIFICA: EMA è ora l'opzione di default (al primo posto nella lista)
+        ma_type = st.sidebar.selectbox("Tipo Media Mobile", options=["Esponenziale (EMA)", "Semplice (SMA)"], help="EMA (Default): Più reattiva ai prezzi recenti, ma soggetta a falsi segnali (whipsaw). SMA: Più stabile, curve più morbide.")
+        
         tail_length = st.slider("Lunghezza Coda (Ultimi N periodi da mostrare nell'RRG)", min_value=1, max_value=20, value=5)
 
         if selected_rrg_assets:
@@ -249,7 +246,7 @@ if uploaded_file is not None:
                                 st.error(f"**{asset}**: INVERSIONE CONFERMATA. È in *Weakening* e ha già iniziato a bruciare cassa ({ret:.2f}%). Il trend si è rotto. Taglia.")
 
     # ---------------------------------------------------------
-    # TAB 2: ANALISI TRADIZIONALE (Spostato qui come seconda pagina)
+    # TAB 2: ANALISI TRADIZIONALE
     # ---------------------------------------------------------
     with tab2:
         st.header("Grafico Prezzi Storici")
