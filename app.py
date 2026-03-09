@@ -120,16 +120,13 @@ if uploaded_file is not None:
                 df_plot = pd.DataFrame(plot_data)
                 current_points = df_plot[df_plot['Is_Current'] == "Ultimo"]
                 
-                # --- MODIFICA: Interruttore per la visualizzazione della coda (Tail) ---
                 st.markdown("---")
                 show_tail = st.toggle("Mostra scia di rotazione (Storico)", value=False, help="Attiva per vedere la traiettoria temporale dell'asset. Senza questa scia, stai ignorando il Momentum direzionale.")
                 
                 if show_tail:
-                    # Grafico RRG completo con la scia (Linee + Punti correnti evidenziati)
                     fig_rrg = px.line(df_plot, x='RS-Ratio', y='RS-Momentum', color='Asset', markers=True, hover_data=['Data'])
                     fig_rrg.add_scatter(x=current_points['RS-Ratio'], y=current_points['RS-Momentum'], mode='markers', marker=dict(size=12, color='black'), showlegend=False, hoverinfo='skip')
                 else:
-                    # Grafico castrato: solo il punto corrente
                     fig_rrg = px.scatter(current_points, x='RS-Ratio', y='RS-Momentum', color='Asset', hover_data=['Data'])
                     fig_rrg.update_traces(marker=dict(size=12, line=dict(width=1, color='DarkSlateGrey')))
 
@@ -212,7 +209,7 @@ if uploaded_file is not None:
 
                 st.markdown("---")
 
-                # 4. Comparazione Strategica Esplicita 
+                # 4. Comparazione Strategica Esplicita
                 st.markdown("### Sintesi Strategica: RRG Incrociato con Heatmap")
                 
                 if not df_returns.empty:
@@ -223,13 +220,11 @@ if uploaded_file is not None:
                             rs_ratio = row['RS-Ratio']
                             rs_mom = row['RS-Momentum']
                             
-                            # Logica dei quadranti
                             if rs_ratio >= 100 and rs_mom >= 100: quad = "Leading"
                             elif rs_ratio < 100 and rs_mom >= 100: quad = "Improving"
                             elif rs_ratio >= 100 and rs_mom < 100: quad = "Weakening"
                             else: quad = "Lagging"
                             
-                            # Sintesi Brutale
                             if quad == "Leading" and ret > 0:
                                 st.success(f"**{asset}**: VERO LEADER. È in *Leading* e ha generato capitale assoluto (+{ret:.2f}%). Sta trainando in termini sia relativi che assoluti.")
                             elif quad == "Leading" and ret <= 0:
