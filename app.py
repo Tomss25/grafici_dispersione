@@ -5,7 +5,7 @@ import plotly.express as px
 
 st.set_page_config(page_title="Quantitative Strategy Desk", layout="wide")
 
-# Iniezione CSS (Mantenuto il tuo stile moderno/Apple)
+# Iniezione CSS 
 st.markdown("""
     <style>
         html, body, [class*="css"] {
@@ -40,20 +40,16 @@ if uploaded_file is not None:
     try:
         if uploaded_file.name.endswith('.csv'):
             try:
-                # Tentativo 1: Standard globale (UTF-8)
                 df = pd.read_csv(uploaded_file)
             except UnicodeDecodeError:
-                # Fallback: Il file arriva da un Excel salvato male (Windows/Latin-1)
                 uploaded_file.seek(0)
                 df = pd.read_csv(uploaded_file, encoding='latin1')
                 
             if df.shape[1] < 2:
                 uploaded_file.seek(0) 
                 try:
-                    # Tentativo CSV Europeo con UTF-8
                     df = pd.read_csv(uploaded_file, sep=';', decimal=',')
                 except UnicodeDecodeError:
-                    # Fallback CSV Europeo con encoding Latin-1
                     uploaded_file.seek(0)
                     df = pd.read_csv(uploaded_file, sep=';', decimal=',', encoding='latin1')
         else:
@@ -67,8 +63,13 @@ if uploaded_file is not None:
         df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
         df = df.dropna(subset=[date_col]).set_index(date_col)
         
-        if df.map(lambda x: isinstance(x, str)).any().any():
-            df = df.replace({',': '.'}, regex=True)
+        # Gestione robusta delle conversioni numeriche
+        if hasattr(df, 'map'):
+            if df.map(lambda x: isinstance(x, str)).any().any():
+                df = df.replace({',': '.'}, regex=True)
+        else:
+            if df.applymap(lambda x: isinstance(x, str)).any().any():
+                df = df.replace({',': '.'}, regex=True)
             
         df = df.apply(pd.to_numeric, errors='coerce').dropna(how='all').sort_index()
 
@@ -98,8 +99,7 @@ if uploaded_file is not None:
         st.sidebar.header("Impostazioni Visualizzazione")
         tail_length = st.sidebar.slider("Lunghezza Coda (Ultimi N periodi)", min_value=1, max_value=20, value=5)
 
-        # Alert brutale sui dati necessari
-        st.info("📊 **Motore Z-Score Attivo:** Il calcolo richiede EMA(12) + EMA(26) + Rolling(52) + Delta(1) + Rolling(14). Le prime ~70 righe del dataset verranno consumate per il warm-up statistico.")
+        st.info("📊 **Motore Z-Score Dinamico:** Il calcolo richiede EMA(12)+EMA(26) ed espande le finestre di deviazione standard dinamicamente (da un minimo di 14 periodi fino ai 52 target) per simulare l'approccio tollerante di Excel sugli storici brevi.")
 
         if selected_rrg_assets:
             df_rrg = df[[benchmark] + selected_rrg_assets].copy()
@@ -115,23 +115,25 @@ if uploaded_file is not None:
                 rs_s = ema_12.ewm(span=26, adjust=False).mean()
                 
                 # 4. Z-score rolling 52w -> RS-Ratio (X) = 100 ± 10σ
-                rolling_mean_52 = rs_s.rolling(window=52).mean()
-                rolling_std_52 = rs_s.rolling(window=52).std()
+                # min_periods=14 permette al modello di iniziare a calcolare molto prima delle 52 settimane
+                rolling_mean_52 = rs_s.rolling(window=52, min_periods=14).mean()
+                rolling_std_52 = rs_s.rolling(window=52, min_periods=14).std()
                 z_score_ratio = (rs_s - rolling_mean_52) / rolling_std_52
                 df_rrg[f'Ratio_{asset}'] = 100 + (z_score_ratio * 10)
                 
                 # 5. ΔRS-Ratio -> Z-score rolling 14w -> RS-Momentum (Y) = 100 ± 10σ
+                # min_periods=7 salva lo storico limitato
                 delta_rs_ratio = df_rrg[f'Ratio_{asset}'].diff(1)
-                rolling_mean_14_mom = delta_rs_ratio.rolling(window=14).mean()
-                rolling_std_14_mom = delta_rs_ratio.rolling(window=14).std()
+                rolling_mean_14_mom = delta_rs_ratio.rolling(window=14, min_periods=7).mean()
+                rolling_std_14_mom = delta_rs_ratio.rolling(window=14, min_periods=7).std()
                 z_score_mom = (delta_rs_ratio - rolling_mean_14_mom) / rolling_std_14_mom
                 df_rrg[f'Mom_{asset}'] = 100 + (z_score_mom * 10)
 
-            # Rimuoviamo tutti i NaN generati dal tremendo consumo di dati delle finestre rolling
+            # Rimuoviamo i pochi NaN residuali derivati dal warm-up flessibile
             df_rrg_clean = df_rrg.dropna()
 
             if df_rrg_clean.empty or len(df_rrg_clean) < tail_length:
-                st.error("🚨 **ERRORE CRITICO DEI DATI:** Non hai abbastanza storico. Il modello Rolling Z-Score ha bruciato i dati per calcolare le deviazioni standard e non è rimasto nulla da plottare. Carica un file con almeno 2-3 anni di storico continuo.")
+                st.error("🚨 **ERRORE CRITICO DEI DATI:** Non hai abbastanza storico nemmeno per il warm-up dinamico. Assicurati che il file contenga almeno 20 righe (periodi) valide.")
             else:
                 df_tail = df_rrg_clean.tail(tail_length)
                 
@@ -167,14 +169,13 @@ if uploaded_file is not None:
                 fig_rrg.add_annotation(x=102, y=98, text="Weakening", showarrow=False, font=dict(color="orange"))
                 fig_rrg.add_annotation(x=98, y=98, text="Lagging", showarrow=False, font=dict(color="red"))
 
-                # Fissiamo i limiti degli assi per dare stabilità visiva al grafico Z-Score
                 fig_rrg.update_layout(
                     title=f"Relative Rotation Graph (Z-Score Model) vs {benchmark}",
                     xaxis_title="RS-Ratio (Forza Relativa Z-Score)",
                     yaxis_title="RS-Momentum (Spinta Z-Score)",
                     height=700,
                     width=700,
-                    xaxis=dict(range=[70, 130]), # +/- 3 Deviazioni Standard (100 ± 30)
+                    xaxis=dict(range=[70, 130]), 
                     yaxis=dict(range=[70, 130])
                 )
                 
@@ -233,4 +234,3 @@ if uploaded_file is not None:
             fig.update_traces(mode=mode_map[chart_style])
             fig.update_layout(hovermode="x unified")
             st.plotly_chart(fig, use_container_width=True)
-
