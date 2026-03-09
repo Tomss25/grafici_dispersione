@@ -3,6 +3,38 @@ import pandas as pd
 import plotly.express as px
 
 st.set_page_config(page_title="Analisi Quantitativa", layout="wide")
+
+# Iniezione CSS per Stile Moderno/Apple (Bordi arrotondati, font puliti, ombre morbide)
+st.markdown("""
+    <style>
+        /* Font di sistema stile Apple */
+        html, body, [class*="css"] {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+        /* Bordi arrotondati per input, selettori e bottoni */
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stMultiSelect div[data-baseweb="select"] > div,
+        .stTextInput input, .stNumberInput input, .stDateInput input {
+            border-radius: 12px !important;
+        }
+        /* Arrotondamento per i messaggi di Info/Success/Error */
+        div[data-testid="stAlert"] {
+            border-radius: 12px !important;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.04);
+        }
+        /* Stile moderno per i Tab */
+        button[data-baseweb="tab"] {
+            border-radius: 10px 10px 0px 0px !important;
+        }
+        /* Contenitori e blocchi */
+        div[data-testid="stExpander"] {
+            border-radius: 12px !important;
+            border: 1px solid #eaeaea;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+        }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("Analisi Serie Storiche & RRG")
 
 st.sidebar.header("1. Dati")
@@ -37,40 +69,13 @@ if uploaded_file is not None:
 
     available_assets = df.columns.tolist()
 
-    tab1, tab2 = st.tabs(["Analisi Tradizionale", "Relative Rotation Graph (RRG)"])
+    # INVERSIONE DELLE PAGINE: Tab 1 è ora l'RRG, Tab 2 è l'Analisi Tradizionale
+    tab1, tab2 = st.tabs(["Relative Rotation Graph (RRG) & Heatmap", "Analisi Tradizionale"])
 
+    # ---------------------------------------------------------
+    # TAB 1: RRG & HEATMAP (Spostato qui come prima pagina)
+    # ---------------------------------------------------------
     with tab1:
-        st.header("Grafico Prezzi Storici")
-        
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_assets_trad = st.multiselect("Asset", options=available_assets, default=available_assets[:3], key="trad_assets")
-        with col2:
-            chart_style = st.selectbox("Stile Grafico", options=["Solo Linee", "Linee + Punti", "Solo Punti"], index=0, key="chart_style")
-
-        if not selected_assets_trad:
-            st.warning("Seleziona asset.")
-        else:
-            df_trad = df[selected_assets_trad]
-            
-            start_date_trad = st.date_input("Inizio", value=df_trad.index.min().date(), key="start_trad")
-            end_date_trad = st.date_input("Fine", value=df_trad.index.max().date(), key="end_trad")
-            
-            df_trad = df_trad.loc[start_date_trad:end_date_trad]
-            
-            if st.checkbox("Normalizza a Base 100", value=True):
-                df_trad = (df_trad / df_trad.iloc[0]) * 100
-                
-            df_melted = df_trad.reset_index().melt(id_vars=date_col, var_name='Asset', value_name='Valore')
-
-            mode_map = {"Solo Linee": "lines", "Linee + Punti": "lines+markers", "Solo Punti": "markers"}
-            
-            fig = px.line(df_melted, x=date_col, y='Valore', color='Asset')
-            fig.update_traces(mode=mode_map[chart_style])
-            fig.update_layout(hovermode="x unified")
-            st.plotly_chart(fig, use_container_width=True)
-
-    with tab2:
         st.header("Relative Rotation Graph (RRG) & Heatmap")
         st.markdown("Mostra la rotazione di forza e momentum rispetto a un benchmark. **Nota:** Il calcolo consuma i primi periodi storici per le medie mobili.")
         
@@ -82,7 +87,10 @@ if uploaded_file is not None:
             rrg_options = [a for a in available_assets if a != benchmark]
             selected_rrg_assets = st.multiselect("Asset da analizzare", options=rrg_options, default=rrg_options[:3])
             
-        rrg_window = st.number_input("Periodi Media Mobile (Standard: 14)", min_value=5, max_value=50, value=14)
+        st.sidebar.markdown("---")
+        st.sidebar.header("Parametri Calcolo RRG")
+        rrg_window = st.sidebar.number_input("Periodi Media Mobile", min_value=5, max_value=50, value=14)
+        ma_type = st.sidebar.selectbox("Tipo Media Mobile", options=["Semplice (SMA)", "Esponenziale (EMA)"], help="SMA: Più stabile, curve più morbide. EMA: Più reattiva ai prezzi recenti, ma soggetta a falsi segnali (whipsaw).")
         tail_length = st.slider("Lunghezza Coda (Ultimi N periodi da mostrare nell'RRG)", min_value=1, max_value=20, value=5)
 
         if selected_rrg_assets:
@@ -92,12 +100,18 @@ if uploaded_file is not None:
                 df_rrg[f'RS_{asset}'] = df_rrg[asset] / df_rrg[benchmark]
                 
             for asset in selected_rrg_assets:
-                rs_sma = df_rrg[f'RS_{asset}'].rolling(window=rrg_window).mean()
-                df_rrg[f'Ratio_{asset}'] = 100 * (df_rrg[f'RS_{asset}'] / rs_sma)
+                if ma_type == "Semplice (SMA)":
+                    rs_ma = df_rrg[f'RS_{asset}'].rolling(window=rrg_window).mean()
+                else:
+                    rs_ma = df_rrg[f'RS_{asset}'].ewm(span=rrg_window, adjust=False).mean()
+                df_rrg[f'Ratio_{asset}'] = 100 * (df_rrg[f'RS_{asset}'] / rs_ma)
                 
             for asset in selected_rrg_assets:
-                ratio_sma = df_rrg[f'Ratio_{asset}'].rolling(window=rrg_window).mean()
-                df_rrg[f'Mom_{asset}'] = 100 * (df_rrg[f'Ratio_{asset}'] / ratio_sma)
+                if ma_type == "Semplice (SMA)":
+                    ratio_ma = df_rrg[f'Ratio_{asset}'].rolling(window=rrg_window).mean()
+                else:
+                    ratio_ma = df_rrg[f'Ratio_{asset}'].ewm(span=rrg_window, adjust=False).mean()
+                df_rrg[f'Mom_{asset}'] = 100 * (df_rrg[f'Ratio_{asset}'] / ratio_ma)
 
             df_rrg_clean = df_rrg.dropna()
 
@@ -150,11 +164,6 @@ if uploaded_file is not None:
                 with col_center:
                     st.plotly_chart(fig_rrg, use_container_width=True)
 
-                # ---------------------------------------------------------
-                # Analisi Automatica RRG, Heatmap e Confronto
-                # ---------------------------------------------------------
-                
-                # 1. Analisi Automatica RRG
                 st.markdown("### Analisi Dinamica RRG")
                 leading, improving, weakening, lagging = [], [], [], []
                 for _, row in current_points.iterrows():
@@ -174,7 +183,6 @@ if uploaded_file is not None:
 
                 st.markdown("---")
 
-                # 2. Performance Heatmap
                 st.subheader("Performance Heatmap (Rendimenti %)")
                 st.markdown("Mostra i rendimenti assoluti periodici per quantificare le variazioni di forza viste nell'RRG.")
                 
@@ -195,7 +203,6 @@ if uploaded_file is not None:
                 fig_hm.update_layout(height=400)
                 st.plotly_chart(fig_hm, use_container_width=True)
 
-                # 3. Analisi Automatica Heatmap
                 st.markdown("### Analisi Dinamica Heatmap")
                 if not df_returns.empty:
                     last_period_returns = df_returns.iloc[-1]
@@ -209,7 +216,6 @@ if uploaded_file is not None:
 
                 st.markdown("---")
 
-                # 4. Comparazione Strategica Esplicita
                 st.markdown("### Sintesi Strategica: RRG Incrociato con Heatmap")
                 
                 if not df_returns.empty:
@@ -241,3 +247,37 @@ if uploaded_file is not None:
                                 st.warning(f"**{asset}**: ESAURIMENTO RIALZISTA. È in *Weakening* ma ti dà ancora soldi (+{ret:.2f}%). Attenzione: la spinta direzionale sta morendo. Prepara la via d'uscita.")
                             elif quad == "Weakening" and ret <= 0:
                                 st.error(f"**{asset}**: INVERSIONE CONFERMATA. È in *Weakening* e ha già iniziato a bruciare cassa ({ret:.2f}%). Il trend si è rotto. Taglia.")
+
+    # ---------------------------------------------------------
+    # TAB 2: ANALISI TRADIZIONALE (Spostato qui come seconda pagina)
+    # ---------------------------------------------------------
+    with tab2:
+        st.header("Grafico Prezzi Storici")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_assets_trad = st.multiselect("Asset", options=available_assets, default=available_assets[:3], key="trad_assets")
+        with col2:
+            chart_style = st.selectbox("Stile Grafico", options=["Solo Linee", "Linee + Punti", "Solo Punti"], index=0, key="chart_style")
+
+        if not selected_assets_trad:
+            st.warning("Seleziona asset.")
+        else:
+            df_trad = df[selected_assets_trad]
+            
+            start_date_trad = st.date_input("Inizio", value=df_trad.index.min().date(), key="start_trad")
+            end_date_trad = st.date_input("Fine", value=df_trad.index.max().date(), key="end_trad")
+            
+            df_trad = df_trad.loc[start_date_trad:end_date_trad]
+            
+            if st.checkbox("Normalizza a Base 100", value=True):
+                df_trad = (df_trad / df_trad.iloc[0]) * 100
+                
+            df_melted = df_trad.reset_index().melt(id_vars=date_col, var_name='Asset', value_name='Valore')
+
+            mode_map = {"Solo Linee": "lines", "Linee + Punti": "lines+markers", "Solo Punti": "markers"}
+            
+            fig = px.line(df_melted, x=date_col, y='Valore', color='Asset')
+            fig.update_traces(mode=mode_map[chart_style])
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
